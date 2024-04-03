@@ -1,10 +1,10 @@
-Xvm BVM
+0xVM XVM
 ======
 
-BVM is still in very rapid iterations before the 1.0.0 release, and the code may be updated at any time. Please try to keep it consistent with the master branch.
+XVM is still in very rapid iterations before the 1.0.0 release, and the code may be updated at any time. Please try to keep it consistent with the master branch.
 
-## Setup BVM instance
-We recommend to use docker to deploy the BVM.
+## Setup XVM instance
+We recommend to use docker to deploy the XVM.
 
 ```bash
 docker-compose up -d
@@ -13,8 +13,8 @@ docker-compose up -d
 ## Exposed Ports
 | Port | Description                        | External Service |
 |------|------------------------------------|------------------|
-| 8545 | Xvm RPC HTTP Sevice               | ✓                |
-| 8679 | Internal RPC Service for xvm-core | ✗                |
+| 8545 | XVM RPC HTTP Sevice                | ✓                |
+| 8679 | Internal RPC Service for 0xvm-core | ✗                |
 
 Since no authentication for internal RPC, **NEVER EXPOSE 8679 PORT TO PUBLIC NETWORK**, make sure the firewall set correctly.
 
