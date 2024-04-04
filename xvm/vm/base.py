@@ -342,3 +342,118 @@ class VM(Configurable, VirtualMachineAPI):
         filled_block = self.set_block_transactions(self.get_block(), new_header, block.transactions, receipts)
 
         return self.mine_block(filled_block)
+
+    def mine_block(
+        self, block: BlockAPI, *args: Any, **kwargs: Any
+    ) -> BlockAndMetaWitness:
+        packed_block = self.pack_block(block, *args, **kwargs)
+        block_result = self.finalize_block(packed_block)
+
+        # Perform validation
+        self.validate_block(block_result.block)
+
+        return block_result
+
+    def set_block_transactions(self, base_block: BlockAPI, new_header: BlockHeaderAPI,
+                               transactions: Sequence[SignedTransactionAPI], receipts: Sequence[ReceiptAPI]) -> BlockAPI:
+        tx_root_hash, tx_kv_nodes = make_trie_root_and_nodes(transactions)
+        self.chaindb.persist_trie_data_dict(tx_kv_nodes)
+
+        receipt_root_hash, receipt_kv_nodes = make_trie_root_and_nodes(receipts)
+        self.chaindb.persist_trie_data_dict(receipt_kv_nodes)
+
+        block_fields: "Block" = {"transactions": transactions}
+        block_header_fields = {
+            "transaction_root": tx_root_hash,
+            "receipt_root": receipt_root_hash,
+        }
+
+        block_fields["header"] = new_header.copy(**block_header_fields)
+
+        return base_block.copy(**block_fields)
+
+    #
+    # Finalization
+    #
+    def _assign_block_rewards(self, block: BlockAPI) -> None:
+        # block_reward = self.get_block_reward() + (
+        #     len(block.uncles) * self.get_nephew_reward()
+        # )
+
+        # EIP-161:
+        # Even if block reward is zero, the coinbase is still touched here. This was
+        # not likely to ever happen in PoW, except maybe in some very niche cases, but
+        # happens now in PoS. In these cases, the coinbase may end up zeroed after the
+        # computation and thus should be marked for deletion since it was touched.
+        # self.state.delta_balance(block.header.coinbase, block_reward)
+        # self.logger.debug(
+        #     "BLOCK REWARD: %s -> %s",
+        #     block_reward,
+        #     encode_hex(block.header.coinbase),
+        # )
+        #
+        # for uncle in block.uncles:
+        #     uncle_reward = self.get_uncle_reward(block.number, uncle)
+        #     self.logger.debug(
+        #         "UNCLE REWARD REWARD: %s -> %s",
+        #         uncle_reward,
+        #         encode_hex(uncle.coinbase),
+        #     )
+        #     self.state.delta_balance(uncle.coinbase, uncle_reward)
+        return
+
+
+    def finalize_block(self, block: BlockAPI) -> BlockAndMetaWitness:
+        if block.number > 0:
+            snapshot = self.state.snapshot()
+            try:
+                self._assign_block_rewards(block)
+            except EVMMissingData:
+                self.state.revert(snapshot)
+                raise
+            else:
+                self.state.commit(snapshot)
+
+        # We need to call `persist` here since the state db batches
+        # all writes until we tell it to write to the underlying db
+        meta_witness = self.state.persist()
+
+        final_block = block.copy(
+            header=block.header.copy(state_root=self.state.state_root)
+        )
+
+        # self.logger.debug(
+        #     "%s reads %d unique node hashes, %d addresses, %d bytecodes, and %d storage slots",  # noqa: E501
+        #     final_block,
+        #     len(meta_witness.hashes),
+        #     len(meta_witness.accounts_queried),
+        #     len(meta_witness.account_bytecodes_queried),
+        #     meta_witness.total_slots_queried,
+        # )
+
+        return BlockAndMetaWitness(final_block, meta_witness)
+
+    def pack_block(self, block: BlockAPI, *args: Any, **kwargs: Any) -> BlockAPI:
+        # if "uncles" in kwargs:
+        #     uncles = kwargs.pop("uncles")
+        #     kwargs.setdefault("uncles_hash", keccak(rlp.encode(uncles)))
+        # else:
+        #     uncles = block.uncles
+
+        provided_fields = set(kwargs.keys())
+        known_fields = set(BlockHeader._meta.field_names)
+        unknown_fields = provided_fields.difference(known_fields)
+
+        if unknown_fields:
+            raise AttributeError(
+                f"Unable to set the field(s) {', '.join(known_fields)} "
+                "on the `BlockHeader` class. "
+                f"Received the following unexpected fields: {', '.join(unknown_fields)}."  # noqa: E501
+            )
+
+        header: BlockHeaderAPI = block.header.copy(**kwargs)
+
+        # packed_block = block.copy(uncles=uncles, header=header)
+        packed_block = block.copy(header=header)
+
+        return packed_block
