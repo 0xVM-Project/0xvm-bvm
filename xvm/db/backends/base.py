@@ -2,6 +2,12 @@ from typing import (
     Iterator,
 )
 
+from xvm.abc import (
+    AtomicDatabaseAPI,
+    DatabaseAPI,
+)
+
+
 class BaseDB(DatabaseAPI):
     """
     This is an abstract key/value lookup with all :class:`bytes` values,
