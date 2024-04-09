@@ -342,3 +342,337 @@ class VM(Configurable, VirtualMachineAPI):
         filled_block = self.set_block_transactions(self.get_block(), new_header, block.transactions, receipts)
 
         return self.mine_block(filled_block)
+
+    def mine_block(
+        self, block: BlockAPI, *args: Any, **kwargs: Any
+    ) -> BlockAndMetaWitness:
+        packed_block = self.pack_block(block, *args, **kwargs)
+        block_result = self.finalize_block(packed_block)
+
+        # Perform validation
+        self.validate_block(block_result.block)
+
+        return block_result
+
+    def set_block_transactions(self, base_block: BlockAPI, new_header: BlockHeaderAPI,
+                               transactions: Sequence[SignedTransactionAPI], receipts: Sequence[ReceiptAPI]) -> BlockAPI:
+        tx_root_hash, tx_kv_nodes = make_trie_root_and_nodes(transactions)
+        self.chaindb.persist_trie_data_dict(tx_kv_nodes)
+
+        receipt_root_hash, receipt_kv_nodes = make_trie_root_and_nodes(receipts)
+        self.chaindb.persist_trie_data_dict(receipt_kv_nodes)
+
+        block_fields: "Block" = {"transactions": transactions}
+        block_header_fields = {
+            "transaction_root": tx_root_hash,
+            "receipt_root": receipt_root_hash,
+        }
+
+        block_fields["header"] = new_header.copy(**block_header_fields)
+
+        return base_block.copy(**block_fields)
+
+    #
+    # Finalization
+    #
+    def _assign_block_rewards(self, block: BlockAPI) -> None:
+        # block_reward = self.get_block_reward() + (
+        #     len(block.uncles) * self.get_nephew_reward()
+        # )
+
+        # EIP-161:
+        # Even if block reward is zero, the coinbase is still touched here. This was
+        # not likely to ever happen in PoW, except maybe in some very niche cases, but
+        # happens now in PoS. In these cases, the coinbase may end up zeroed after the
+        # computation and thus should be marked for deletion since it was touched.
+        # self.state.delta_balance(block.header.coinbase, block_reward)
+        # self.logger.debug(
+        #     "BLOCK REWARD: %s -> %s",
+        #     block_reward,
+        #     encode_hex(block.header.coinbase),
+        # )
+        #
+        # for uncle in block.uncles:
+        #     uncle_reward = self.get_uncle_reward(block.number, uncle)
+        #     self.logger.debug(
+        #         "UNCLE REWARD REWARD: %s -> %s",
+        #         uncle_reward,
+        #         encode_hex(uncle.coinbase),
+        #     )
+        #     self.state.delta_balance(uncle.coinbase, uncle_reward)
+        return
+
+
+    def finalize_block(self, block: BlockAPI) -> BlockAndMetaWitness:
+        if block.number > 0:
+            snapshot = self.state.snapshot()
+            try:
+                self._assign_block_rewards(block)
+            except EVMMissingData:
+                self.state.revert(snapshot)
+                raise
+            else:
+                self.state.commit(snapshot)
+
+        # We need to call `persist` here since the state db batches
+        # all writes until we tell it to write to the underlying db
+        meta_witness = self.state.persist()
+
+        final_block = block.copy(
+            header=block.header.copy(state_root=self.state.state_root)
+        )
+
+        # self.logger.debug(
+        #     "%s reads %d unique node hashes, %d addresses, %d bytecodes, and %d storage slots",  # noqa: E501
+        #     final_block,
+        #     len(meta_witness.hashes),
+        #     len(meta_witness.accounts_queried),
+        #     len(meta_witness.account_bytecodes_queried),
+        #     meta_witness.total_slots_queried,
+        # )
+
+        return BlockAndMetaWitness(final_block, meta_witness)
+
+    def pack_block(self, block: BlockAPI, *args: Any, **kwargs: Any) -> BlockAPI:
+        # if "uncles" in kwargs:
+        #     uncles = kwargs.pop("uncles")
+        #     kwargs.setdefault("uncles_hash", keccak(rlp.encode(uncles)))
+        # else:
+        #     uncles = block.uncles
+
+        provided_fields = set(kwargs.keys())
+        known_fields = set(BlockHeader._meta.field_names)
+        unknown_fields = provided_fields.difference(known_fields)
+
+        if unknown_fields:
+            raise AttributeError(
+                f"Unable to set the field(s) {', '.join(known_fields)} "
+                "on the `BlockHeader` class. "
+                f"Received the following unexpected fields: {', '.join(unknown_fields)}."  # noqa: E501
+            )
+
+        header: BlockHeaderAPI = block.header.copy(**kwargs)
+
+        # packed_block = block.copy(uncles=uncles, header=header)
+        packed_block = block.copy(header=header)
+
+        return packed_block
+
+    #
+    # Blocks
+    #
+
+    @classmethod
+    def create_genesis_header(cls, **genesis_params: Any) -> BlockHeaderAPI:
+        # Create genesis header by setting the parent to None
+        return cls.create_header_from_parent(None, **genesis_params)
+
+    @classmethod
+    def get_block_class(cls) -> Type[BlockAPI]:
+        if cls.block_class is None:
+            raise AttributeError("No `block_class` has been set for this VM")
+        else:
+            return cls.block_class
+
+    @classmethod
+    def get_prev_hashes(
+        cls, last_block_hash: Hash32, chaindb: ChainDatabaseAPI
+    ) -> Optional[Iterable[Hash32]]:
+        if last_block_hash == GENESIS_PARENT_HASH:
+            return
+
+        block_header = get_block_header_by_hash(last_block_hash, chaindb)
+
+        for _ in range(MAX_PREV_HEADER_DEPTH):
+            yield block_header.hash
+            try:
+                block_header = get_parent_header(block_header, chaindb)
+            except (IndexError, HeaderNotFound):
+                break
+
+    @property
+    def previous_hashes(self) -> Optional[Iterable[Hash32]]:
+        return self.get_prev_hashes(self.get_header().parent_hash, self.chaindb)
+
+    #
+    # Transactions
+    #
+    @classmethod
+    def create_transaction(cls, *args: Any, **kwargs: Any) -> SignedTransactionAPI:
+        # return cls.get_transaction_builder().new_transaction(b'', **kwargs)
+        return cls.get_transaction_builder().new_transaction(**kwargs)
+
+    @classmethod
+    def get_transaction_builder(cls) -> Type[TransactionBuilderAPI]:
+        return cls.get_block_class().get_transaction_builder()
+
+    @classmethod
+    def get_receipt_builder(cls) -> Type[ReceiptBuilderAPI]:
+        return cls.get_block_class().get_receipt_builder()
+
+    #
+    # Validate
+    #
+    @classmethod
+    def validate_receipt(cls, receipt: ReceiptAPI) -> None:
+        already_checked: Set[Union[Address, int]] = set()
+
+        for log_idx, log in enumerate(receipt.logs):
+            if log.address in already_checked:
+                continue
+            elif log.address not in receipt.bloom_filter:
+                raise ValidationError(
+                    f"The address from the log entry at position {log_idx} is not "
+                    "present in the provided bloom filter."
+                )
+            already_checked.add(log.address)
+
+        for log_idx, log in enumerate(receipt.logs):
+            for topic_idx, topic in enumerate(log.topics):
+                if topic in already_checked:
+                    continue
+                elif uint32.serialize(topic) not in receipt.bloom_filter:
+                    raise ValidationError(
+                        f"The topic at position {topic_idx} from the log entry at "
+                        f"position {log_idx} is not present in the provided bloom filter."  # noqa: E501
+                    )
+                already_checked.add(topic)
+
+    def validate_block(self, block: BlockAPI) -> None:
+        if not isinstance(block, self.get_block_class()):
+            raise ValidationError(
+                f"This vm ({self!r}) is not equipped to validate a block of type {block!r}"  # noqa: E501
+            )
+
+        if block.is_genesis:
+            validate_length_lte(
+                block.header.extra_data,
+                self.extra_data_max_bytes,
+                title="BlockHeader.extra_data",
+            )
+        else:
+            parent_header = get_parent_header(block.header, self.chaindb)
+            self.validate_header(block.header, parent_header)
+
+        tx_root_hash, _ = make_trie_root_and_nodes(block.transactions)
+        if tx_root_hash != block.header.transaction_root:
+            raise ValidationError(
+                f"Block's transaction_root ({block.header.transaction_root!r}) "
+                f"does not match expected value: {tx_root_hash!r}"
+            )
+
+        # if len(block.uncles) > MAX_UNCLES:
+        #     raise ValidationError(
+        #         f"Blocks may have a maximum of {MAX_UNCLES} uncles.  "
+        #         f"Found {len(block.uncles)}."
+        #     )
+
+        if not self.chaindb.exists(block.header.state_root):
+            # If not in the db, check if the current state root matches.
+            if not self.state.make_state_root() == block.header.state_root:
+                raise ValidationError(
+                    "`state_root` does not match or was not found in the db.\n"
+                    f"- state_root: {block.header.state_root!r}"
+                )
+
+        # local_uncle_hash = keccak(rlp.encode(block.uncles))
+        # if local_uncle_hash != block.header.uncles_hash:
+        #     raise ValidationError(
+        #         "`uncles_hash` and block `uncles` do not match.\n"
+        #         f" - num_uncles       : {len(block.uncles)}\n"
+        #         f" - block uncle_hash : {local_uncle_hash!r}\n"
+        #         f" - header uncle_hash: {block.header.uncles_hash!r}"
+        #     )
+
+    @classmethod
+    def validate_header(
+        cls, header: BlockHeaderAPI, parent_header: BlockHeaderAPI
+    ) -> None:
+        if parent_header is None:
+            # to validate genesis header, check if it equals canonical header
+            # at block number 0
+            raise ValidationError(
+                "Must have access to parent header to validate current header"
+            )
+        else:
+            validate_length_lte(
+                header.extra_data,
+                cls.extra_data_max_bytes,
+                title="BlockHeader.extra_data",
+            )
+
+            # cls.validate_gas(header, parent_header)
+
+            if header.block_number != parent_header.block_number + 1:
+                raise ValidationError(
+                    "Blocks must be numbered consecutively. "
+                    f"Block number #{header.block_number} "
+                    f"has parent #{parent_header.block_number}"
+                )
+
+            # timestamp
+            if header.timestamp <= parent_header.timestamp:
+                raise ValidationError(
+                    "timestamp must be strictly later than parent, "
+                    f"but is {parent_header.timestamp - header.timestamp} seconds before.\n"  # noqa: E501
+                    f"- child  : {header.timestamp}\n"
+                    f"- parent : {parent_header.timestamp}. "
+                )
+
+    @classmethod
+    def validate_gas(
+        cls, header: BlockHeaderAPI, parent_header: BlockHeaderAPI
+    ) -> None:
+        validate_gas_limit(header.gas_limit, parent_header.gas_limit)
+
+    def validate_seal(self, header: BlockHeaderAPI) -> None:
+        try:
+            self._consensus.validate_seal(header)
+        except ValidationError as exc:
+            self.cls_logger.debug(
+                "Failed to validate seal on header: %r. Error: %s",
+                header.as_dict(),
+                exc,
+            )
+            raise
+
+    #
+    # State
+    #
+    @classmethod
+    def get_state_class(cls) -> Type[StateAPI]:
+        if cls._state_class is None:
+            raise AttributeError("No `_state_class` has been set for this VM")
+
+        return cls._state_class
+
+    @classmethod
+    def generate_block_from_parent_header(
+        cls, parent_header: BlockHeaderAPI
+    ) -> BlockAPI:
+        block_header = cls.create_header_from_parent(parent_header)
+        block = cls.get_block_class()(
+            block_header,
+            transactions=[],
+        )
+        return block
+
+    @contextlib.contextmanager
+    def in_costless_state(self) -> Iterator[StateAPI]:
+        header = self.get_header()
+
+        temp_block = self.generate_block_from_parent_header(
+            header
+        )
+        prev_hashes = itertools.chain((header.hash,), self.previous_hashes)
+
+
+        free_header = temp_block.header
+
+        state = self.build_state(
+            self.chaindb.db, free_header, self.chain_context, prev_hashes
+        )
+
+        snapshot = state.snapshot()
+        yield state
+        state.revert(snapshot)

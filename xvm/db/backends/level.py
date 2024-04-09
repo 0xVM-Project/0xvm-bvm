@@ -14,6 +14,18 @@ from eth_utils import (
     ValidationError,
 )
 
+from xvm._warnings import (
+    catch_and_ignore_import_warning,
+)
+from xvm.abc import (
+    AtomicWriteBatchAPI,
+    DatabaseAPI,
+)
+from xvm.db.diff import (
+    DBDiffTracker,
+    DiffMissingError,
+)
+
 from .base import (
     BaseAtomicDB,
     BaseDB,
