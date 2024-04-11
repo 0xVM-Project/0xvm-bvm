@@ -23,8 +23,8 @@ docker-compose up -d
 
 | Port | Description                        | External Service |
 | ---- | ---------------------------------- | ---------------- |
-| 8545 | Veda RPC HTTP Sevice               | ✓                |
-| 8679 | Internal RPC Service for veda-core | ✗                |
+| 8545 | XVM RPC HTTP Sevice               | ✓                |
+| 8679 | Internal RPC Service for 0xvm-core | ✗                |
 
 Since no authentication for internal RPC, **NEVER EXPOSE 8679 PORT TO PUBLIC NETWORK**, make sure the firewall set correctly.
 

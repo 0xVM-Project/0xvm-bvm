@@ -84,7 +84,7 @@ class MissingStorageTrieNode(EVMMissingData, MissingTrieNode):
 
     @property
     def account_address(self) -> Address:
-        return self.args[3]
+        return self.args[4]
 
     def __repr__(self) -> str:
         return f"MissingStorageTrieNode: {self}"
