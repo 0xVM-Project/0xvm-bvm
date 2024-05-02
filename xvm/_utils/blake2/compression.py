@@ -4,7 +4,6 @@ from typing import (
 )
 
 doc = """
-    Lovingly lifted from https://github.com/buggywhip/blake2_py
     with this license:
 
       Copyright (c) 2009-2018 Larry Bugbee, Kent, WA, USA
