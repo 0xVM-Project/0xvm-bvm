@@ -4,3 +4,4 @@ from .ecrecover import ecrecover  # noqa: F401
 from .ripemd160 import ripemd160  # noqa: F401
 from .modexp import modexp  # noqa: F401
 from .ecadd import ecadd  # noqa: F401
+from .ecmul import ecmul  # noqa: F401
