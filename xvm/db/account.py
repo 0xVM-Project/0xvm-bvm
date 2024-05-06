@@ -338,6 +338,49 @@ class AccountDB(AccountDatabaseAPI):
         self._set_account(address, account.copy(code_hash=EMPTY_SHA3))
 
     #
+    # Account Methods
+    #
+    def account_has_code_or_nonce(self, address: Address) -> bool:
+        return self.get_nonce(address) != 0 or self.get_code_hash(address) != EMPTY_SHA3
+
+    def delete_account(self, address: Address) -> None:
+        validate_canonical_address(address, title="Storage Address")
+
+        # We must wipe the storage first, because if it's the first time we load it,
+        #   then we want to load it with the original storage root hash, not the
+        #   empty one. (in case of a later revert, we don't want to poison the
+        #   storage cache)
+        self._wipe_storage(address)
+
+        if address in self._account_cache:
+            del self._account_cache[address]
+        del self._journaltrie[address]
+
+    def account_exists(self, address: Address) -> bool:
+        validate_canonical_address(address, title="Storage Address")
+        account_rlp = self._get_encoded_account(address, from_journal=True)
+        return account_rlp != b""
+
+    def touch_account(self, address: Address) -> None:
+        validate_canonical_address(address, title="Storage Address")
+
+        account = self._get_account(address)
+        self._set_account(address, account)
+
+    def account_is_empty(self, address: Address) -> bool:
+        return (
+            not self.account_has_code_or_nonce(address)
+            and self.get_balance(address) == 0
+        )
+
+    def is_address_warm(self, address: Address) -> bool:
+        return address in self._journal_accessed_state
+
+    def mark_address_warm(self, address: Address) -> None:
+        if address not in self._journal_accessed_state:
+            self._journal_accessed_state[address] = IS_PRESENT_VALUE
+
+    #
     # Internal
     #
     def _get_encoded_account(

@@ -79,6 +79,9 @@ class AsyncHeaderDB(BaseAsyncHeaderDB):
     coro_get_canonical_head = async_method(BaseAsyncHeaderDB.get_canonical_head)
     coro_get_score = async_method(BaseAsyncHeaderDB.get_score)
     coro_header_exists = async_method(BaseAsyncHeaderDB.header_exists)
+    coro_persist_checkpoint_header = async_method(BaseAsyncHeaderDB.persist_checkpoint_header)
+    coro_persist_header = async_method(BaseAsyncHeaderDB.persist_header)
+    coro_persist_header_chain = async_method(BaseAsyncHeaderDB.persist_header_chain)
 
 
 class TrioHeaderDB(BaseAsyncHeaderDB):
@@ -88,3 +91,6 @@ class TrioHeaderDB(BaseAsyncHeaderDB):
     coro_get_canonical_head = trio_method(BaseAsyncHeaderDB.get_canonical_head)
     coro_get_score = trio_method(BaseAsyncHeaderDB.get_score)
     coro_header_exists = trio_method(BaseAsyncHeaderDB.header_exists)
+    coro_persist_checkpoint_header = trio_method(BaseAsyncHeaderDB.persist_checkpoint_header)
+    coro_persist_header = trio_method(BaseAsyncHeaderDB.persist_header)
+    coro_persist_header_chain = trio_method(BaseAsyncHeaderDB.persist_header_chain)
